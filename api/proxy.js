@@ -1,8 +1,6 @@
 // api/proxy.js
 // Adaptado de Cloudflare Workers a Vercel Edge Functions.
 // Mismo comportamiento: descifra ?q=, o usa ?url=/?u=/?target= + ?ref=,
-// hace fetch con rotación de perfiles de navegador, y devuelve el recurso
-// con headers CORS. Sirve como respaldo si el proxy de Cloudflare falla.
 
 export const config = {
   runtime: 'edge',
@@ -196,7 +194,7 @@ export default async function handler(req) {
 
   const u = new URL(req.url);
   let target = null;
-  let referer = 'https://ttmi.la/';
+  let referer = 'https://hitomi.la/';
 
   const q = u.searchParams.get('q');
   if (q) {
@@ -217,7 +215,7 @@ export default async function handler(req) {
 
   if (!/^https?:\/\//i.test(target)) return errResp(400, 'URL inválida');
 
-  try { new URL(referer); } catch { referer = 'https://ttmi.la/'; }
+  try { new URL(referer); } catch { referer = 'https://hitomi.la/'; }
 
   // Nota: Vercel Edge no tiene `caches.default` como Cloudflare.
   // El cacheo aquí se delega al Cache-Control que mandamos abajo (la CDN
