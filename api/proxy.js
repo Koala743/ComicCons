@@ -1,6 +1,6 @@
-// api/[...all].js — Proxy VORTEX + endpoint de test en un solo archivo
+// ...all].js — Proxy VORTEX + test (sin frontend)
 
-// ── VORTEX CIPHER ──────────────────────────
+// ══════════════════════════════════════════════
 const _VMK = new Uint8Array([
   0xF3,0x8A,0x1C,0x77,0xE2,0x4B,0x9D,0x30,0x56,0xC1,0xAF,0x0E,0x72,0xD9,0x3F,0x88,
   0x1B,0x64,0xA5,0xEC,0x27,0x90,0x4D,0xB6,0x03,0xF7,0x5E,0xC8,0x39,0x12,0x6A,0xDB
@@ -57,7 +57,7 @@ async function vDecrypt(blob) {
   } catch { return null; }
 }
 
-// ── CORS ────────────────────────────────────
+// ══════════════════════════════════════════════
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
@@ -75,12 +75,12 @@ function errResp(status, msg) {
   });
 }
 
-// ── HANDLER PRINCIPAL ───────────────────────
+// ══════════════════════════════════════════════
 export default async function handler(request) {
   const url = new URL(request.url);
-  const path = url.pathname.replace(/\/$/, ''); // ej: "/api/test" o "/api/proxy"
+  const path = url.pathname.replace(/\/$/, '');
 
-  // ── RUTA DE TEST ──────────────────────────
+  // ── Endpoint de test ──────────────────────
   if (path === '/api/test') {
     return new Response(JSON.stringify({
       ok: true,
@@ -92,9 +92,9 @@ export default async function handler(request) {
     });
   }
 
-  // ── RUTA DEL PROXY ────────────────────────
+  // ── Solo se permite /api/proxy ────────────
   if (path !== '/api/proxy') {
-    return errResp(404, 'Ruta no encontrada. Usa /api/proxy o /api/test');
+    return errResp(404, 'Usa /api/proxy o /api/test');
   }
 
   if (request.method === 'OPTIONS') {
