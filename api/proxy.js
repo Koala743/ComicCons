@@ -1,5 +1,6 @@
-// api/proxy.js
-// ── CORE ────────────────────────────────────
+// api/[...all].js — Proxy VORTEX + endpoint de test en un solo archivo
+
+// ── VORTEX CIPHER ──────────────────────────
 const _VMK = new Uint8Array([
   0xF3,0x8A,0x1C,0x77,0xE2,0x4B,0x9D,0x30,0x56,0xC1,0xAF,0x0E,0x72,0xD9,0x3F,0x88,
   0x1B,0x64,0xA5,0xEC,0x27,0x90,0x4D,0xB6,0x03,0xF7,0x5E,0xC8,0x39,0x12,0x6A,0xDB
@@ -12,7 +13,6 @@ async function _vKey() {
   _VK = await crypto.subtle.importKey('raw', _VMK, { name:'HKDF' }, false, ['deriveKey']);
   return _VK;
 }
-
 async function _vDerive(salt) {
   return crypto.subtle.deriveKey(
     { name:'HKDF', hash:'SHA-512', salt, info:_VCTX },
@@ -20,7 +20,6 @@ async function _vDerive(salt) {
     { name:'AES-GCM', length:256 }, false, ['decrypt']
   );
 }
-
 function _vUnscramble(bytes) {
   const out = new Uint8Array(bytes.length);
   let acc = 0xA7;
@@ -31,7 +30,6 @@ function _vUnscramble(bytes) {
   }
   return out;
 }
-
 function b64d(s) {
   s = s.replace(/-/g,'+').replace(/_/g,'/');
   while (s.length % 4) s += '=';
@@ -39,7 +37,6 @@ function b64d(s) {
   for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i);
   return u;
 }
-
 async function vDecrypt(blob) {
   let raw; try { raw = b64d(blob); } catch { return null; }
   if (raw.length < 29) return null;
@@ -60,19 +57,17 @@ async function vDecrypt(blob) {
   } catch { return null; }
 }
 
+// ── CORS ────────────────────────────────────
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
   'Access-Control-Allow-Headers': '*',
   'Access-Control-Expose-Headers': 'Content-Type, Content-Length, X-Cache',
   'Access-Control-Max-Age': '86400',
-  'Vary': 'Origin',
 };
-
 function addCors(r) {
   Object.entries(CORS).forEach(([k,v]) => r.headers.set(k, v));
 }
-
 function errResp(status, msg) {
   return new Response(JSON.stringify({ error: msg }), {
     status,
@@ -80,45 +75,63 @@ function errResp(status, msg) {
   });
 }
 
+// ── HANDLER PRINCIPAL ───────────────────────
 export default async function handler(request) {
+  const url = new URL(request.url);
+  const path = url.pathname.replace(/\/$/, ''); // ej: "/api/test" o "/api/proxy"
+
+  // ── RUTA DE TEST ──────────────────────────
+  if (path === '/api/test') {
+    return new Response(JSON.stringify({
+      ok: true,
+      timestamp: Date.now(),
+      message: 'Proxy VORTEX activo en Vercel'
+    }), {
+      status: 200,
+      headers: { ...CORS, 'Content-Type': 'application/json' },
+    });
+  }
+
+  // ── RUTA DEL PROXY ────────────────────────
+  if (path !== '/api/proxy') {
+    return errResp(404, 'Ruta no encontrada. Usa /api/proxy o /api/test');
+  }
+
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: CORS });
   }
   if (request.method !== 'GET') {
-    return errResp(405, 'Método no permitido');
+    return errResp(405, 'Solo GET permitido');
   }
 
-  const u = new URL(request.url);
   let target = null;
   let referer = 'https://hitomi.la/';
 
   // Modo VORTEX: ?q=
-  const q = u.searchParams.get('q');
+  const q = url.searchParams.get('q');
   if (q) {
     const decoded = await vDecrypt(q);
-    if (!decoded || !decoded.url) return errResp(400, 'Token inválido');
+    if (!decoded || !decoded.url) return errResp(400, 'Token Vortex inválido');
     target = decoded.url;
     referer = decoded.ref || referer;
   }
 
   // Modo legado: ?url= (base64)
   if (!target) {
-    const enc = u.searchParams.get('url') || u.searchParams.get('u') || u.searchParams.get('target');
+    const enc = url.searchParams.get('url') || url.searchParams.get('u') || url.searchParams.get('target');
     if (!enc) return errResp(400, 'Falta ?q= o ?url=');
     try {
       target = atob(enc);
     } catch {
       try { target = decodeURIComponent(enc); } catch { target = enc; }
     }
-    const rawRef = u.searchParams.get('ref');
+    const rawRef = url.searchParams.get('ref');
     if (rawRef) try { referer = decodeURIComponent(rawRef); } catch { referer = rawRef; }
   }
 
   if (!/^https?:\/\//i.test(target)) return errResp(400, 'URL inválida');
-
   try { new URL(referer); } catch { referer = 'https://hitomi.la/'; }
 
-  // Pool de User-Agents (simplificado)
   const UA = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
@@ -143,11 +156,11 @@ export default async function handler(request) {
       if (res.ok || res.status === 404) break;
       if ([403, 429].includes(res.status)) await new Promise(r => setTimeout(r, 500 * (i+1)));
     } catch (e) {
-      if (i === 2) return errResp(502, 'Fetch falló');
+      if (i === 2) return errResp(502, 'Fetch falló tras 3 intentos');
     }
   }
 
-  if (!res) return errResp(502, 'Sin respuesta');
+  if (!res) return errResp(502, 'Sin respuesta del servidor');
 
   const body = await res.arrayBuffer();
   const ct = res.headers.get('Content-Type') || 'application/octet-stream';
