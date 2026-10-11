@@ -108,6 +108,53 @@ function errResp(status, msg) {
   });
 }
 
+const _enc = new TextEncoder();
+
+function _b64uBytes(s) {
+  s = String(s).replace(/-/g, '+').replace(/_/g, '/');
+  while (s.length % 4) s += '=';
+  const b = atob(s);
+  const a = new Uint8Array(b.length);
+  for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i);
+  return a;
+}
+
+function _secreto() {
+  return process.env.COMIX_TOKEN_SECRET ? String(process.env.COMIX_TOKEN_SECRET) : '';
+}
+
+async function _tokenOk(token, secreto) {
+  try {
+    const t = String(token || '');
+    const p = t.indexOf('.');
+    if (p < 1) return false;
+    const exp = t.slice(0, p);
+    if (!/^\d+$/.test(exp) || Date.now() > Number(exp)) return false;
+    const key = await crypto.subtle.importKey('raw', _enc.encode(secreto), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']);
+    return await crypto.subtle.verify('HMAC', key, _b64uBytes(t.slice(p + 1)), _enc.encode(exp));
+  } catch (_) {
+    return false;
+  }
+}
+
+function _hostBloqueado(h) {
+  h = String(h || '').toLowerCase();
+  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal')) return true;
+  if (h.startsWith('[') || h.includes(':')) return true;
+  const m = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (m) {
+    const a = +m[1], b = +m[2];
+    if (a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)) return true;
+  }
+  return false;
+}
+
+function _esNavegacion(headersGet) {
+  const dest = (headersGet('Sec-Fetch-Dest') || '').toLowerCase();
+  const mode = (headersGet('Sec-Fetch-Mode') || '').toLowerCase();
+  return mode === 'navigate' || ['document', 'iframe', 'frame', 'embed', 'object'].includes(dest);
+}
+
 const delay = ms => new Promise(r => setTimeout(r, ms));
 
 function inferCT(url) {
@@ -134,6 +181,12 @@ export default async function handler(req) {
   let target = null;
   let referer = 'https://hitomi.la/';
 
+  const secreto = _secreto();
+  if (_esNavegacion(n => req.headers.get(n))) return errResp(403, 'Acceso directo no permitido');
+  if (secreto && !(await _tokenOk(u.searchParams.get('pk'), secreto))) {
+    return errResp(401, 'Token requerido');
+  }
+
   const enc = u.searchParams.get('url') || u.searchParams.get('u') || u.searchParams.get('target');
   if (!enc) return errResp(400, 'Falta ?url=');
   try { target = atob(enc); }
@@ -142,6 +195,8 @@ export default async function handler(req) {
   if (rawRef) try { referer = decodeURIComponent(rawRef); } catch (_) { referer = rawRef; }
 
   if (!/^https?:\/\//i.test(target)) return errResp(400, 'URL inválida');
+  try { if (_hostBloqueado(new URL(target).hostname)) return errResp(403, 'Host no permitido'); }
+  catch (_) { return errResp(400, 'URL inválida'); }
 
   try { new URL(referer); } catch { referer = 'https://hitomi.la/'; }
 
@@ -180,7 +235,7 @@ export default async function handler(req) {
   const outHeaders = new Headers();
   addCors(outHeaders);
   outHeaders.set('Content-Type', ct);
-  outHeaders.set('Cache-Control', res.ok ? `public, max-age=${ttl}, immutable` : 'no-store');
+  outHeaders.set('Cache-Control', res.ok ? `${secreto ? 'private' : 'public'}, max-age=${ttl}, immutable` : 'no-store');
   outHeaders.set('Content-Length', body.byteLength.toString());
   outHeaders.set('X-Cache', 'MISS');
 
