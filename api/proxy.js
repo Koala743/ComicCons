@@ -89,7 +89,6 @@ const isDoc = u => /\.(js|json|nozomi)(\?|$)/i.test(u);
 const getTTL = u => isImg(u) ? 86400 * 30 : isDoc(u) ? 3600 : 3600;
 
 const CORS = {
-  'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
   'Access-Control-Allow-Headers': '*',
   'Access-Control-Expose-Headers': 'Content-Type, Content-Length, X-Cache, Cache-Control',
@@ -121,6 +120,42 @@ function _b64uBytes(s) {
 
 function _secreto() {
   return process.env.COMIX_TOKEN_SECRET ? String(process.env.COMIX_TOKEN_SECRET) : '';
+}
+
+const EXIGIR_SELLO = false;
+
+const ORIGENES = ['https://comixhentai.uk', 'https://www.comixhentai.uk'];
+
+function conOrigen(resp, req) {
+  const out = new Response(resp.body, resp);
+  const o = req.headers.get('Origin') || '';
+  if (o && ORIGENES.includes(o)) out.headers.set('Access-Control-Allow-Origin', o);
+  return out;
+}
+
+let _clavesSello = null;
+
+async function _hmacBytes(keyBytes, msg) {
+  const k = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return new Uint8Array(await crypto.subtle.sign('HMAC', k, msg));
+}
+
+async function _abrirSello(secreto, sello) {
+  try {
+    if (!/^s1\.[A-Za-z0-9_-]+$/.test(sello)) return null;
+    if (!_clavesSello || _clavesSello.s !== secreto) {
+      const raw = await _hmacBytes(_enc.encode(secreto), _enc.encode('comix-sello-v1|enc'));
+      _clavesSello = { s: secreto, k: await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt']) };
+    }
+    const b = _b64uBytes(sello.slice(3));
+    if (b.length < 29) return null;
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b.slice(0, 12) }, _clavesSello.k, b.slice(12));
+    const d = JSON.parse(new TextDecoder().decode(pt));
+    if (!d || typeof d.u !== 'string') return null;
+    return { u: d.u, r: typeof d.r === 'string' ? d.r : '' };
+  } catch (_) {
+    return null;
+  }
 }
 
 async function _tokenOk(token, secreto) {
@@ -169,7 +204,7 @@ function inferCT(url) {
 }
 
 // Vercel Edge Functions usan esta firma: export default function handler(req)
-export default async function handler(req) {
+async function manejar(req) {
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: CORS });
   }
@@ -187,12 +222,21 @@ export default async function handler(req) {
     return errResp(401, 'Token requerido');
   }
 
-  const enc = u.searchParams.get('url') || u.searchParams.get('u') || u.searchParams.get('target');
-  if (!enc) return errResp(400, 'Falta ?url=');
-  try { target = atob(enc); }
-  catch (_) { try { target = decodeURIComponent(enc); } catch (_) { target = enc; } }
-  const rawRef = u.searchParams.get('ref');
-  if (rawRef) try { referer = decodeURIComponent(rawRef); } catch (_) { referer = rawRef; }
+  const sello = u.searchParams.get('e');
+  if (sello) {
+    const d = secreto ? await _abrirSello(secreto, sello) : null;
+    if (!d) return errResp(400, 'Sello inválido');
+    target = d.u;
+    if (d.r) referer = d.r;
+  } else {
+    if (EXIGIR_SELLO && secreto) return errResp(400, 'Sello requerido');
+    const enc = u.searchParams.get('url') || u.searchParams.get('u') || u.searchParams.get('target');
+    if (!enc) return errResp(400, 'Falta ?url=');
+    try { target = atob(enc); }
+    catch (_) { try { target = decodeURIComponent(enc); } catch (_) { target = enc; } }
+    const rawRef = u.searchParams.get('ref');
+    if (rawRef) try { referer = decodeURIComponent(rawRef); } catch (_) { referer = rawRef; }
+  }
 
   if (!/^https?:\/\//i.test(target)) return errResp(400, 'URL inválida');
   try { if (_hostBloqueado(new URL(target).hostname)) return errResp(403, 'Host no permitido'); }
@@ -245,4 +289,8 @@ export default async function handler(req) {
   }
 
   return new Response(body, { status: res.status, headers: outHeaders });
+}
+
+export default async function handler(req) {
+  return conOrigen(await manejar(req), req);
 }
